@@ -56,14 +56,21 @@ python stale-audit.py --archive old-project --dry-run --yes
 
 DEAD repos are pre-selected. After confirming, you get a final `[y/N]` prompt before anything moves.
 
+## Dependency Detection
+
+Before scoring, the tool scans each repo's key files (CLAUDE.md, README.md, scripts, configs) for references to sibling project names. If project A references project B, B is marked as a dependency.
+
+Repos depended on by active projects get their score **zeroed** and tagged `DEP: needed by X, Y`. This prevents archiving reference repos, shared libraries, or infrastructure projects that other active projects rely on.
+
 ## How It Works
 
 1. Auto-detects group directories (any `_`-prefixed folder like `_grobomo/`, `_tmemu/`)
 2. Scans each subfolder for `.git`
-3. Scores and sorts by staleness (most stale first)
-4. Prints color-coded summary
-5. Opens interactive selector
-6. Moves selected repos to `Archive/`
+3. Detects dependencies between projects (grep-based, no LLM)
+4. Scores and sorts by staleness (most stale first, dependencies protected)
+5. Prints color-coded summary
+6. Opens interactive selector
+7. Moves selected repos to `Archive/`
 
 ## Environment
 
