@@ -183,8 +183,8 @@ def _read_text_safe(path, max_bytes=100_000):
         return ""
 
 
-def _scan_files_for_refs(repo_path, patterns):
-    """Scan key files in a repo for references matching any pattern. Returns set of matched project names."""
+def _scan_files_for_refs(repo_path, patterns, all_names):
+    """Scan key files in a repo for references to sibling projects. Returns set of matched names."""
     found = set()
     files_to_scan = []
 
@@ -194,11 +194,14 @@ def _scan_files_for_refs(repo_path, patterns):
         if f.is_file():
             files_to_scan.append(f)
 
-    # Files in scan dirs (one level deep)
+    # Files in scan dirs (skip heavy subdirs)
+    skip_dirs = {"node_modules", ".git", "dist", "build", "__pycache__", "venv", ".venv", "archive"}
     for dname in DEP_SCAN_DIRS:
         d = repo_path / dname
         if d.is_dir():
             for f in d.rglob("*"):
+                if any(p in skip_dirs for p in f.parts):
+                    continue
                 if f.is_file() and f.suffix in DEP_SCAN_EXTENSIONS:
                     files_to_scan.append(f)
 
@@ -206,8 +209,10 @@ def _scan_files_for_refs(repo_path, patterns):
         text = _read_text_safe(f)
         if not text:
             continue
-        for name, pattern in patterns:
-            if pattern.search(text):
+        # Fast pre-filter: only run regex for names that appear as substrings
+        text_lower = text.lower()
+        for name in all_names:
+            if name.lower() in text_lower and patterns[name].search(text):
                 found.add(name)
 
     return found
@@ -226,24 +231,23 @@ def detect_dependencies(repos):
         all_names.add(r["name"])
         name_to_repos.setdefault(r["name"], []).append(r)
 
-    # Build regex patterns for each project name
-    # Match the name as a path component or standalone word
-    patterns = []
-    for name in sorted(all_names):
-        # Escape for regex, match as path segment or word boundary
+    # Build one combined pattern for fast scanning, then per-name patterns for matching
+    name_list = sorted(all_names)
+    # Per-name patterns for identifying which name matched
+    patterns = {}
+    for name in name_list:
         escaped = re.escape(name)
-        pat = re.compile(
+        patterns[name] = re.compile(
             r'(?:(?:^|[\s/\\"\':,])' + escaped + r'(?:[\s/\\"\':,.]|$)'
             + r'|'
             + r'\.\./\s*' + escaped
             + r')',
             re.MULTILINE | re.IGNORECASE
         )
-        patterns.append((name, pat))
 
     # Scan each repo
     for r in repos:
-        refs = _scan_files_for_refs(r["path"], patterns)
+        refs = _scan_files_for_refs(r["path"], patterns, name_list)
         refs.discard(r["name"])  # don't count self-references
         r["depends_on"] = sorted(refs)
 
