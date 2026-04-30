@@ -16,7 +16,11 @@ import sys, json
 repos = json.load(sys.stdin)
 assert len(repos) > 0, 'No repos found'
 r = repos[0]
-for field in ['depends_on', 'depended_on_by', 'dep_protected']:
+for field in ['depends_on', 'depended_on_by', 'dep_protected', 'dep_evidence', 'depended_on_by_evidence']:
     assert field in r, f'Missing field: {field}'
-print(f'PASS: {len(repos)} repos, all have dependency fields')
+# Verify evidence structure: dep_evidence values are lists of {file, snippet}
+for name, hits in r.get('dep_evidence', {}).items():
+    for hit in hits:
+        assert 'file' in hit and 'snippet' in hit, f'Bad evidence structure for {name}'
+print(f'PASS: {len(repos)} repos, all have dependency + evidence fields')
 "
