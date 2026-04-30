@@ -9,9 +9,12 @@ Usage:
     python stale-audit.py                      # Interactive mode
     python stale-audit.py --dry-run            # Show what would be archived
     python stale-audit.py --summary            # Print summary only, no interaction
+    python stale-audit.py --json               # Machine-readable JSON output
+    python stale-audit.py --archive a b c      # Headless: archive named repos (requires --yes)
     python stale-audit.py --dir /path/to/root  # Override projects directory
 """
 
+import json
 import os
 import sys
 import subprocess
@@ -405,16 +408,90 @@ def archive_repos(to_archive, dry_run=False):
     print(f"\n{color}{status}\033[0m")
 
 
+# --- JSON output ---
+
+def repo_to_dict(r):
+    """Serialize a repo info dict for JSON output."""
+    return {
+        "name": r["name"],
+        "group": r["group"],
+        "path": str(r["path"]),
+        "score": r["score"],
+        "label": staleness_label_plain(r["score"]),
+        "last_commit": r["last_commit"].strftime("%Y-%m-%d") if r["last_commit"] else None,
+        "days_since_commit": r["days_since_commit"],
+        "commit_count": r["commit_count"],
+        "empty_git": r["empty_git"],
+        "no_commits": r["no_commits"],
+        "has_remote": r["has_remote"],
+        "has_publish_json": r["has_publish_json"],
+        "has_secret_scan": r["has_secret_scan"],
+        "git_user": r["git_user"],
+    }
+
+
+def get_archive_names():
+    """Parse --archive name1 name2 ... from argv."""
+    names = []
+    capture = False
+    for arg in sys.argv[1:]:
+        if arg == "--archive":
+            capture = True
+            continue
+        if capture:
+            if arg.startswith("--"):
+                break
+            names.append(arg)
+    return names
+
+
 # --- Main ---
 
 def main():
     dry_run = "--dry-run" in sys.argv
     summary_only = "--summary" in sys.argv
+    json_mode = "--json" in sys.argv
+    archive_names = get_archive_names()
+    auto_yes = "--yes" in sys.argv
 
-    print("Scanning repos...", end="", flush=True)
+    if not json_mode:
+        print("Scanning repos...", end="", flush=True)
     repos = scan_all()
-    print(f" found {len(repos)} git repos.")
+    if not json_mode:
+        print(f" found {len(repos)} git repos.")
 
+    # --json: machine-readable output, no interaction
+    if json_mode:
+        print(json.dumps([repo_to_dict(r) for r in repos], indent=2))
+        return
+
+    # --archive name1 name2: headless archive by name
+    if archive_names:
+        name_set = set(archive_names)
+        to_archive = [r for r in repos if r["name"] in name_set]
+        found = {r["name"] for r in to_archive}
+        missing = name_set - found
+        if missing:
+            print(f"Warning: not found: {', '.join(sorted(missing))}")
+        if not to_archive:
+            print("No matching repos found.")
+            return
+        print(f"Archiving {len(to_archive)} repos:")
+        for r in to_archive:
+            print(f"  - {r['name']} ({r['group']}, score {r['score']})")
+        if dry_run:
+            archive_repos(to_archive, dry_run=True)
+        elif auto_yes:
+            archive_repos(to_archive)
+        else:
+            confirm = input(f"\nMove {len(to_archive)} repos to Archive/? [y/N] ").strip().lower()
+            if confirm == "y":
+                archive_repos(to_archive)
+            else:
+                print("Cancelled.")
+        return
+
+    # Default: summary + interactive
     print_summary(repos)
 
     if summary_only:
