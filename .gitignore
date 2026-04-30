@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 .env
 .workflow-state.json
+SESSION_STATE.md
