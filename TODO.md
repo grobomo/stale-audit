@@ -1,6 +1,6 @@
 # stale-audit TODO
 
 ## Active
-- [ ] T001: Create stale-audit.py — scan repos, score staleness, interactive checkbox UI to archive
-- [ ] T002: Add publish.json, secret-scan.yml, .gitignore, README
+- [x] T001: Create stale-audit.py — scan, score, interactive checkbox UI, archive (merged to main)
+- [x] T002: Add publish.json, secret-scan.yml, .gitignore, README (merged to main)
 - [ ] T003: Push to grobomo/stale-audit
