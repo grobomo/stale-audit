@@ -5,4 +5,5 @@
 - [x] T002: Add publish.json, secret-scan.yml, .gitignore, README (merged to main)
 - [x] T003: Push to grobomo/stale-audit (https://github.com/grobomo/stale-audit)
 - [x] T004: Verify end-to-end — 64 repos, scoring categories confirmed
-- [ ] T005: Add --json and --archive flags for headless/CI mode
+- [x] T005: Add --json and --archive flags for headless/CI mode (pushed)
+- [ ] T006: Dependency detection — grep key files for sibling project names, reduce score for depended-on repos, tag in output
