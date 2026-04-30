@@ -16,6 +16,7 @@ Usage:
 
 import json
 import os
+import re
 import sys
 import subprocess
 import shutil
@@ -159,6 +160,128 @@ def scan_all():
     return repos
 
 
+# --- Dependency detection ---
+
+# Files to scan for references to sibling projects
+DEP_SCAN_FILES = [
+    "CLAUDE.md", "README.md", "STATUS.md", "TODO.md",
+    ".mcp.json", "package.json", "pyproject.toml",
+    "Makefile", "Dockerfile", "docker-compose.yml",
+]
+DEP_SCAN_DIRS = ["scripts", ".claude", ".github"]
+DEP_SCAN_EXTENSIONS = {".py", ".sh", ".js", ".ts", ".yml", ".yaml", ".json", ".toml", ".md"}
+
+
+def _read_text_safe(path, max_bytes=100_000):
+    """Read file as text, skip binary/large files."""
+    try:
+        size = path.stat().st_size
+        if size > max_bytes:
+            return ""
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _scan_files_for_refs(repo_path, patterns, all_names):
+    """Scan key files in a repo for references to sibling projects. Returns set of matched names."""
+    found = set()
+    files_to_scan = []
+
+    # Top-level key files
+    for fname in DEP_SCAN_FILES:
+        f = repo_path / fname
+        if f.is_file():
+            files_to_scan.append(f)
+
+    # Files in scan dirs (skip heavy subdirs)
+    skip_dirs = {"node_modules", ".git", "dist", "build", "__pycache__", "venv", ".venv", "archive"}
+    for dname in DEP_SCAN_DIRS:
+        d = repo_path / dname
+        if d.is_dir():
+            for f in d.rglob("*"):
+                if any(p in skip_dirs for p in f.parts):
+                    continue
+                if f.is_file() and f.suffix in DEP_SCAN_EXTENSIONS:
+                    files_to_scan.append(f)
+
+    for f in files_to_scan:
+        text = _read_text_safe(f)
+        if not text:
+            continue
+        # Fast pre-filter: only run regex for names that appear as substrings
+        text_lower = text.lower()
+        for name in all_names:
+            if name.lower() in text_lower and patterns[name].search(text):
+                found.add(name)
+
+    return found
+
+
+def detect_dependencies(repos):
+    """Scan each repo for references to sibling project names.
+
+    Mutates repos in place: adds 'depended_on_by' and 'depends_on' lists.
+    Repos depended on by active projects get score zeroed.
+    """
+    # Build name -> repo lookup and patterns
+    all_names = set()
+    name_to_repos = {}
+    for r in repos:
+        all_names.add(r["name"])
+        name_to_repos.setdefault(r["name"], []).append(r)
+
+    # Build one combined pattern for fast scanning, then per-name patterns for matching
+    name_list = sorted(all_names)
+    # Per-name patterns for identifying which name matched
+    patterns = {}
+    for name in name_list:
+        escaped = re.escape(name)
+        patterns[name] = re.compile(
+            r'(?:(?:^|[\s/\\"\':,])' + escaped + r'(?:[\s/\\"\':,.]|$)'
+            + r'|'
+            + r'\.\./\s*' + escaped
+            + r')',
+            re.MULTILINE | re.IGNORECASE
+        )
+
+    # Scan each repo
+    for r in repos:
+        refs = _scan_files_for_refs(r["path"], patterns, name_list)
+        refs.discard(r["name"])  # don't count self-references
+        r["depends_on"] = sorted(refs)
+
+    # Build reverse map: who depends on me?
+    depended_on_by = {name: set() for name in all_names}
+    for r in repos:
+        for dep_name in r["depends_on"]:
+            depended_on_by[dep_name].add(r["name"])
+
+    # Apply to each repo
+    for r in repos:
+        dependents = sorted(depended_on_by.get(r["name"], set()))
+        r["depended_on_by"] = dependents
+
+        # If any active repo depends on this one, zero the score
+        if dependents:
+            active_dependents = []
+            for dep_name in dependents:
+                for dep_repo in name_to_repos.get(dep_name, []):
+                    if dep_repo["score"] < 40:  # ACTIVE or QUIET
+                        active_dependents.append(dep_name)
+                        break
+            if active_dependents:
+                r["score"] = 0
+                r["dep_protected"] = True
+            else:
+                r["dep_protected"] = False
+        else:
+            r["dep_protected"] = False
+
+    # Re-sort after score changes
+    repos.sort(key=lambda r: (-r["score"], r["name"]))
+
+
 # --- Display ---
 
 def format_age(days):
@@ -233,7 +356,13 @@ def print_summary(repos):
         group_tag = f"\033[90m({r['group']})\033[0m"
         label_str = colored(f"{label:>6s}", r["score"])
 
-        print(f"  {label_str}  {r['name']:<30s} {group_tag:<18s} last: {date_str:<12s} ({age}){flag_str}")
+        dep_str = ""
+        if r.get("dep_protected"):
+            dep_str = f"  \033[95mDEP: needed by {', '.join(r['depended_on_by'])}\033[0m"
+        elif r.get("depended_on_by"):
+            dep_str = f"  \033[90mdep: {', '.join(r['depended_on_by'])}\033[0m"
+
+        print(f"  {label_str}  {r['name']:<30s} {group_tag:<18s} last: {date_str:<12s} ({age}){flag_str}{dep_str}")
 
     dead = sum(1 for r in repos if r["score"] >= 70)
     stale = sum(1 for r in repos if 40 <= r["score"] < 70)
@@ -427,6 +556,9 @@ def repo_to_dict(r):
         "has_publish_json": r["has_publish_json"],
         "has_secret_scan": r["has_secret_scan"],
         "git_user": r["git_user"],
+        "depends_on": r.get("depends_on", []),
+        "depended_on_by": r.get("depended_on_by", []),
+        "dep_protected": r.get("dep_protected", False),
     }
 
 
@@ -459,6 +591,12 @@ def main():
     repos = scan_all()
     if not json_mode:
         print(f" found {len(repos)} git repos.")
+        print("Detecting dependencies...", end="", flush=True)
+    detect_dependencies(repos)
+    if not json_mode:
+        dep_count = sum(1 for r in repos if r.get("depended_on_by"))
+        protected = sum(1 for r in repos if r.get("dep_protected"))
+        print(f" {dep_count} have dependents, {protected} protected.")
 
     # --json: machine-readable output, no interaction
     if json_mode:

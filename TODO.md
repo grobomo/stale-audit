@@ -6,4 +6,4 @@
 - [x] T003: Push to grobomo/stale-audit (https://github.com/grobomo/stale-audit)
 - [x] T004: Verify end-to-end — 64 repos, scoring categories confirmed
 - [x] T005: Add --json and --archive flags for headless/CI mode (pushed)
-- [ ] T006: Dependency detection — grep key files for sibling project names, reduce score for depended-on repos, tag in output
+- [x] T006: Dependency detection — grep key files for sibling refs, zero score for depended-on repos, 44 protected, 6 candidates remain
