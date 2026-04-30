@@ -10,7 +10,22 @@ Scans repos, scores them by staleness (last commit age, missing config, empty `.
 python stale-audit.py                      # Interactive mode
 python stale-audit.py --summary            # Summary only, no interaction
 python stale-audit.py --dry-run            # Preview what would be archived
+python stale-audit.py --json               # Machine-readable JSON output
+python stale-audit.py --archive a b c      # Archive named repos (add --yes to skip prompt)
 python stale-audit.py --dir /path/to/root  # Override projects directory
+```
+
+### Headless mode (for CI or Claude Code)
+
+```bash
+# Get JSON, pipe to jq or another tool
+python stale-audit.py --json | jq '.[] | select(.score >= 40)'
+
+# Archive specific repos without interaction
+python stale-audit.py --archive old-project dead-repo --yes
+
+# Preview archive without moving
+python stale-audit.py --archive old-project --dry-run --yes
 ```
 
 ## Staleness Scoring
