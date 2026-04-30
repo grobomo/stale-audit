@@ -10,6 +10,7 @@ Usage:
     python stale-audit.py --dry-run            # Show what would be archived
     python stale-audit.py --summary            # Print summary only, no interaction
     python stale-audit.py --json               # Machine-readable JSON output
+    python stale-audit.py --deps               # Show dependency evidence for validation
     python stale-audit.py --archive a b c      # Headless: archive named repos (requires --yes)
     python stale-audit.py --dir /path/to/root  # Override projects directory
 """
@@ -184,8 +185,11 @@ def _read_text_safe(path, max_bytes=100_000):
 
 
 def _scan_files_for_refs(repo_path, patterns, all_names):
-    """Scan key files in a repo for references to sibling projects. Returns set of matched names."""
-    found = set()
+    """Scan key files in a repo for references to sibling projects.
+
+    Returns dict: {name: [(relative_file, snippet), ...]} with evidence.
+    """
+    found = {}  # name -> [(rel_path, snippet), ...]
     files_to_scan = []
 
     # Top-level key files
@@ -209,11 +213,22 @@ def _scan_files_for_refs(repo_path, patterns, all_names):
         text = _read_text_safe(f)
         if not text:
             continue
-        # Fast pre-filter: only run regex for names that appear as substrings
+        rel_path = str(f.relative_to(repo_path)).replace("\\", "/")
         text_lower = text.lower()
         for name in all_names:
-            if name.lower() in text_lower and patterns[name].search(text):
-                found.add(name)
+            if name.lower() in text_lower:
+                match = patterns[name].search(text)
+                if match:
+                    start = max(0, match.start() - 40)
+                    end = min(len(text), match.end() + 40)
+                    snippet = text[start:end].replace("\n", " ").strip()
+                    # Sanitize non-ASCII to avoid encoding errors on Windows
+                    snippet = snippet.encode("ascii", errors="replace").decode("ascii")
+                    if start > 0:
+                        snippet = "..." + snippet
+                    if end < len(text):
+                        snippet = snippet + "..."
+                    found.setdefault(name, []).append((rel_path, snippet))
 
     return found
 
@@ -245,27 +260,29 @@ def detect_dependencies(repos):
             re.MULTILINE | re.IGNORECASE
         )
 
-    # Scan each repo
+    # Scan each repo — now returns evidence dict
     for r in repos:
-        refs = _scan_files_for_refs(r["path"], patterns, name_list)
-        refs.discard(r["name"])  # don't count self-references
-        r["depends_on"] = sorted(refs)
+        evidence = _scan_files_for_refs(r["path"], patterns, name_list)
+        evidence.pop(r["name"], None)  # don't count self-references
+        r["depends_on"] = sorted(evidence.keys())
+        r["dep_evidence"] = evidence  # {target_name: [(file, snippet), ...]}
 
-    # Build reverse map: who depends on me?
-    depended_on_by = {name: set() for name in all_names}
+    # Build reverse map: who depends on me? (with evidence)
+    depended_on_by = {name: {} for name in all_names}  # name -> {dependant: [(file, snippet)]}
     for r in repos:
-        for dep_name in r["depends_on"]:
-            depended_on_by[dep_name].add(r["name"])
+        for dep_name, hits in r["dep_evidence"].items():
+            depended_on_by[dep_name][r["name"]] = hits
 
     # Apply to each repo
     for r in repos:
-        dependents = sorted(depended_on_by.get(r["name"], set()))
-        r["depended_on_by"] = dependents
+        dependents_evidence = depended_on_by.get(r["name"], {})
+        r["depended_on_by"] = sorted(dependents_evidence.keys())
+        r["depended_on_by_evidence"] = dependents_evidence  # {dependant: [(file, snippet)]}
 
         # If any active repo depends on this one, zero the score
-        if dependents:
+        if dependents_evidence:
             active_dependents = []
-            for dep_name in dependents:
+            for dep_name in dependents_evidence:
                 for dep_repo in name_to_repos.get(dep_name, []):
                     if dep_repo["score"] < 40:  # ACTIVE or QUIET
                         active_dependents.append(dep_name)
@@ -327,6 +344,59 @@ def colored(text, score):
     return f"{staleness_color(score)}{text}\033[0m"
 
 
+def print_deps_report(repos):
+    """Print detailed dependency report with evidence for user validation."""
+    protected = [r for r in repos if r.get("dep_protected")]
+    has_deps = [r for r in repos if r.get("depended_on_by") and not r.get("dep_protected")]
+
+    print("\n\033[1m=== Dependency Report ===\033[0m")
+    print(f"    Base: {BASE}\n")
+
+    if not protected and not has_deps:
+        print("  No cross-project dependencies detected.\n")
+        return
+
+    # Protected repos (score zeroed due to active dependents)
+    max_hits = 3  # Show at most N evidence lines per dependency edge
+
+    if protected:
+        print(f"\033[1m\033[95m  PROTECTED ({len(protected)} repos — score zeroed because active projects depend on them)\033[0m\n")
+        for r in sorted(protected, key=lambda x: x["name"]):
+            evidence = r.get("depended_on_by_evidence", {})
+            print(f"  \033[1m{r['name']}\033[0m \033[90m({r['group']})\033[0m")
+            for dependant in sorted(evidence):
+                hits = evidence[dependant]
+                print(f"    \033[95m<- {dependant}\033[0m \033[90m({len(hits)} match{'es' if len(hits) != 1 else ''})\033[0m")
+                for file_path, snippet in hits[:max_hits]:
+                    display = snippet[:100] + "..." if len(snippet) > 100 else snippet
+                    print(f"       \033[90m{file_path}: \033[0m{display}")
+                if len(hits) > max_hits:
+                    print(f"       \033[90m... and {len(hits) - max_hits} more (use --json for full list)\033[0m")
+            print()
+
+    # Non-protected repos with dependents (dependents are also stale)
+    if has_deps:
+        print(f"\033[1m\033[33m  HAS DEPENDENTS ({len(has_deps)} repos — dependents are also stale, not protected)\033[0m\n")
+        for r in sorted(has_deps, key=lambda x: x["name"]):
+            evidence = r.get("depended_on_by_evidence", {})
+            label = colored(staleness_label_plain(r["score"]), r["score"])
+            print(f"  {label} \033[1m{r['name']}\033[0m \033[90m({r['group']})\033[0m")
+            for dependant in sorted(evidence):
+                hits = evidence[dependant]
+                print(f"    \033[33m<- {dependant}\033[0m \033[90m({len(hits)} match{'es' if len(hits) != 1 else ''})\033[0m")
+                for file_path, snippet in hits[:max_hits]:
+                    display = snippet[:100] + "..." if len(snippet) > 100 else snippet
+                    print(f"       \033[90m{file_path}: \033[0m{display}")
+                if len(hits) > max_hits:
+                    print(f"       \033[90m... and {len(hits) - max_hits} more (use --json for full list)\033[0m")
+            print()
+
+    # Summary
+    total_edges = sum(len(r.get("depended_on_by", [])) for r in repos if r.get("depended_on_by"))
+    print(f"\033[1m  Total: {len(protected)} protected, {len(has_deps)} with stale dependents, {total_edges} dependency edges\033[0m")
+    print(f"  \033[90mReview the evidence above. False positives? File an issue or use --json to inspect.\033[0m\n")
+
+
 def print_summary(repos):
     print("\n\033[1m=== Project Staleness Audit ===\033[0m")
     print(f"    Base: {BASE}\n")
@@ -369,12 +439,16 @@ def print_summary(repos):
     aging = sum(1 for r in repos if 20 <= r["score"] < 40)
     quiet = sum(1 for r in repos if 10 <= r["score"] < 20)
     active = sum(1 for r in repos if r["score"] < 10)
+    protected = sum(1 for r in repos if r.get("dep_protected"))
     print(f"\n\033[1mTotal: {len(repos)} repos\033[0m — "
           f"\033[91m{dead} dead\033[0m, "
           f"\033[93m{stale} stale\033[0m, "
           f"\033[33m{aging} aging\033[0m, "
           f"\033[36m{quiet} quiet\033[0m, "
-          f"\033[92m{active} active\033[0m\n")
+          f"\033[92m{active} active\033[0m")
+    if protected:
+        print(f"  \033[90m{protected} repos protected by dependencies. Run with --deps to see evidence.\033[0m")
+    print()
 
 
 # --- Interactive checkbox UI ---
@@ -559,6 +633,14 @@ def repo_to_dict(r):
         "depends_on": r.get("depends_on", []),
         "depended_on_by": r.get("depended_on_by", []),
         "dep_protected": r.get("dep_protected", False),
+        "dep_evidence": {
+            name: [{"file": f, "snippet": s} for f, s in hits]
+            for name, hits in r.get("dep_evidence", {}).items()
+        },
+        "depended_on_by_evidence": {
+            name: [{"file": f, "snippet": s} for f, s in hits]
+            for name, hits in r.get("depended_on_by_evidence", {}).items()
+        },
     }
 
 
@@ -583,6 +665,7 @@ def main():
     dry_run = "--dry-run" in sys.argv
     summary_only = "--summary" in sys.argv
     json_mode = "--json" in sys.argv
+    deps_mode = "--deps" in sys.argv
     archive_names = get_archive_names()
     auto_yes = "--yes" in sys.argv
 
@@ -601,6 +684,11 @@ def main():
     # --json: machine-readable output, no interaction
     if json_mode:
         print(json.dumps([repo_to_dict(r) for r in repos], indent=2))
+        return
+
+    # --deps: show dependency evidence report
+    if deps_mode:
+        print_deps_report(repos)
         return
 
     # --archive name1 name2: headless archive by name

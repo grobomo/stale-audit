@@ -12,3 +12,4 @@
 - [x] T009: Push final state to GitHub — sync all merged PRs to remote (PR #3)
 - [x] T010: Add SESSION_STATE.md to .gitignore — context-reset artifact shouldn't be tracked (PR #5)
 - [x] T011: Create Claude Code skill (SKILL.md) for invoking stale-audit from any session (PR #6)
+- [ ] T012: Show dependency evidence — `--deps` flag, track which file/snippet triggered each dependency, let users validate findings

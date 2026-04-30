@@ -11,6 +11,7 @@ python stale-audit.py                      # Interactive mode
 python stale-audit.py --summary            # Summary only, no interaction
 python stale-audit.py --dry-run            # Preview what would be archived
 python stale-audit.py --json               # Machine-readable JSON output
+python stale-audit.py --deps               # Show dependency evidence for validation
 python stale-audit.py --archive a b c      # Archive named repos (add --yes to skip prompt)
 python stale-audit.py --dir /path/to/root  # Override projects directory
 ```
@@ -61,6 +62,8 @@ DEAD repos are pre-selected. After confirming, you get a final `[y/N]` prompt be
 Before scoring, the tool scans each repo's key files (CLAUDE.md, README.md, scripts, configs) for references to sibling project names. If project A references project B, B is marked as a dependency.
 
 Repos depended on by active projects get their score **zeroed** and tagged `DEP: needed by X, Y`. This prevents archiving reference repos, shared libraries, or infrastructure projects that other active projects rely on.
+
+Use `--deps` to see the full dependency report with evidence — which file and what snippet triggered each dependency. This lets you validate findings and catch false positives before trusting the protection.
 
 ## How It Works
 
