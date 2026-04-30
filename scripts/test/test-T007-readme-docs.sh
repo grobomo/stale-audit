@@ -4,7 +4,7 @@ README="$(dirname "$0")/../../README.md"
 FAILS=0
 
 for flag in "--json" "--archive" "--dry-run" "--summary" "--dir" "--yes"; do
-  if ! grep -qF "$flag" "$README"; then
+  if ! grep -qF -- "$flag" "$README"; then
     echo "FAIL: $flag not documented in README.md"
     FAILS=$((FAILS + 1))
   fi
