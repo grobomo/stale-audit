@@ -1,0 +1,59 @@
+# stale-audit
+
+Interactive staleness scanner and archive tool for a directory of git projects.
+
+Scans repos, scores them by staleness (last commit age, missing config, empty `.git`, no remote), and presents a checkbox UI to select repos for archiving.
+
+## Usage
+
+```bash
+python stale-audit.py                      # Interactive mode
+python stale-audit.py --summary            # Summary only, no interaction
+python stale-audit.py --dry-run            # Preview what would be archived
+python stale-audit.py --dir /path/to/root  # Override projects directory
+```
+
+## Staleness Scoring
+
+| Signal | Points |
+|--------|--------|
+| No commits | +50 |
+| Empty `.git` dir | +40 |
+| Last commit >6 months | +30 |
+| Last commit >3 months | +20 |
+| Last commit >2 months | +15 |
+| Last commit >1 month | +10 |
+| No remote | +10 |
+| No `publish.json` | +3 |
+| No `secret-scan.yml` | +2 |
+
+**Labels:** DEAD (70+), STALE (40+), AGING (20+), QUIET (10+), ACTIVE (<10)
+
+## Interactive Controls
+
+| Key | Action |
+|-----|--------|
+| Arrow up/down | Move cursor |
+| Space | Toggle selection |
+| A | Toggle all STALE+ repos |
+| Enter | Confirm selection |
+| Q / Esc | Cancel |
+
+DEAD repos are pre-selected. After confirming, you get a final `[y/N]` prompt before anything moves.
+
+## How It Works
+
+1. Auto-detects group directories (any `_`-prefixed folder like `_grobomo/`, `_tmemu/`)
+2. Scans each subfolder for `.git`
+3. Scores and sorts by staleness (most stale first)
+4. Prints color-coded summary
+5. Opens interactive selector
+6. Moves selected repos to `Archive/`
+
+## Environment
+
+Set `PROJECTS_DIR` to override the default scan root (`~/Documents/ProjectsCL1`).
+
+## License
+
+MIT
