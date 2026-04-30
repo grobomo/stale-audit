@@ -9,4 +9,4 @@
 - [x] T006: Dependency detection — grep key files for sibling refs, zero score for depended-on repos, 44 protected, 6 candidates remain
 - [x] T007: Update README with --json, --archive, dependency detection docs (PR #2)
 - [x] T008: Add MIT LICENSE file (PR #1)
-- [ ] T009: Push final state to GitHub — sync all merged PRs to remote
+- [x] T009: Push final state to GitHub — sync all merged PRs to remote (PR #3)
